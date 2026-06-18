@@ -1,42 +1,13 @@
 import { extension_settings, getContext } from '../../../extensions.js';
 import { extension_prompt_roles, extension_prompt_types } from '../../../../script.js';
 
-// This map correctly translates the API key from the UI dropdown (e.g., 'makersuite')
-// to the string that SillyTavern's /api slash command expects (e.g., 'google').
-const CONNECT_API_MAP = {
-    // Standard Cloud APIs
-    openai: { selected: 'openai' },
-    claude: { selected: 'claude' },
-    openrouter: { selected: 'openrouter' },
-    mistralai: { selected: 'mistral' }, // UI key is 'mistralai', command is 'mistral'
-    deepseek: { selected: 'deepseek' },
-    cohere: { selected: 'cohere' },
-    groq: { selected: 'groq' },
-    xai: { selected: 'xai' },
-    perplexity: { selected: 'perplexity' },
-    '01ai': { selected: '01ai' },
-    aimlapi: { selected: 'aimlapi' },
-    pollinations: { selected: 'pollinations' },
-
-    // Google APIs (both use the 'google' command)
-    makersuite: { selected: 'google' },
-    vertexai: { selected: 'google' },
-
-    // Local / Self-Hosted APIs
-    textgenerationwebui: { selected: 'ooba' },
-    koboldcpp: { selected: 'koboldcpp' },
-    llamacpp: { selected: 'llamacpp' },
-    ollama: { selected: 'ollama' },
-    vllm: { selected: 'vllm' },
-
-    // Other/Special
-    nanogpt: { selected: 'nanogpt' },
-    scale: { selected: 'scale' },
-    windowai: { selected: 'windowai' },
-    ai21: { selected: 'ai21' },
-    custom: { selected: 'custom' },
-};
-
+// The Gremlin API picker (content.js) only ever stores a chat_completion_source
+// value (e.g. 'nanogpt', 'custom', 'makersuite', 'openai', 'mistralai'). Every
+// such value is itself a valid argument for SillyTavern's /api slash command,
+// which switches main_api + chat_completion_source together, so no translation
+// map is needed. The one special case is "Custom OpenAI compatible" ('custom'):
+// its endpoint URL lives in a separate field (#custom_api_url_text) and /api has
+// no url argument, so the URL must be applied with the /api-url command.
 
 // --- DEFAULT GREMLIN PROMPT CONSTANTS (Exported for use in content.js UI) ---
 export const DEFAULT_PAPA_INSTRUCTIONS = `[OOC: You are Papa Gremlin, The Architect. Your primary objective is to craft a **high-level, flexible, and RULE-ADHERENT blueprint** for the *next character response*. This blueprint will serve as a foundational guide for subsequent refinement and writing stages. You operate with the understanding that the final output will be used in a sophisticated roleplaying environment with strict rules.
@@ -161,7 +132,6 @@ export async function applyGremlinEnvironment(role) {
     const apiNameSetting = settings[`gremlin${roleUpper}Api`];
     const modelName = settings[`gremlin${roleUpper}Model`];
     const customUrl = settings[`gremlin${roleUpper}CustomUrl`];
-    const source = settings[`gremlin${roleUpper}Source`];
 
     const commands = [];
 
@@ -170,27 +140,21 @@ export async function applyGremlinEnvironment(role) {
     }
 
     if (apiNameSetting) {
-        const apiNameKey = apiNameSetting.toLowerCase();
-        const apiConfig = CONNECT_API_MAP[apiNameKey];
+        const apiSource = String(apiNameSetting).toLowerCase();
 
-        if (apiConfig) {
-            let apiCommand = `/api ${apiConfig.selected}`;
-            if (apiConfig.selected === 'custom' && customUrl) {
-                apiCommand += ` url=${customUrl}`;
-            }
-            commands.push(apiCommand);
+        // For "Custom OpenAI compatible" the endpoint URL lives in a separate
+        // field (#custom_api_url_text) and /api has no url argument. Set the URL
+        // FIRST with /api-url (connect=false works even before 'custom' is the
+        // active source), THEN switch with /api so it connects against the
+        // correct URL instead of timing out on the previously-stored one.
+        if (apiSource === 'custom' && customUrl) {
+            commands.push(`/api-url api=custom connect=false "${customUrl}"`);
+        }
 
-            if (modelName) {
-                let modelCommand = `/model "${modelName}"`;
-                if (source) {
-                    modelCommand += ` source_field=${source}`;
-                }
-                commands.push(modelCommand);
-            }
-        } else {
-            console.error(`[ProjectGremlin] Unknown API mapping for "${apiNameSetting}" for role ${roleUpper}.`);
-            window.toastr.error(`[ProjectGremlin] Unknown API mapping for ${roleUpper}: "${apiNameSetting}"`, "Project Gremlin");
-            return false;
+        commands.push(`/api ${apiSource}`);
+
+        if (modelName) {
+            commands.push(`/model "${modelName}"`);
         }
     }
 
@@ -222,7 +186,7 @@ export async function applyGremlinWriterChaosOption(chaosOption) {
         return false;
     }
 
-    const { preset, api: apiNameSetting, model: modelName, customUrl, source } = chaosOption;
+    const { preset, api: apiNameSetting, model: modelName, customUrl } = chaosOption;
     const commands = [];
 
     if (preset && preset !== 'Default') {
@@ -230,27 +194,16 @@ export async function applyGremlinWriterChaosOption(chaosOption) {
     }
 
     if (apiNameSetting) {
-        const apiNameKey = apiNameSetting.toLowerCase();
-        const apiConfig = CONNECT_API_MAP[apiNameKey];
+        const apiSource = String(apiNameSetting).toLowerCase();
 
-        if (apiConfig) {
-            let apiCommand = `/api ${apiConfig.selected}`;
-            if (apiConfig.selected === 'custom' && customUrl) {
-                apiCommand += ` url=${customUrl}`;
-            }
-            commands.push(apiCommand);
+        if (apiSource === 'custom' && customUrl) {
+            commands.push(`/api-url api=custom connect=false "${customUrl}"`);
+        }
 
-            if (modelName) {
-                let modelCommand = `/model "${modelName}"`;
-                if (source) {
-                    modelCommand += ` source_field=${source}`;
-                }
-                commands.push(modelCommand);
-            }
-        } else {
-            console.error(`[ProjectGremlin] Unknown API mapping for chaos option "${apiNameSetting}".`);
-            window.toastr.error(`[ProjectGremlin] Unknown API in chaos option: "${apiNameSetting}"`, "Project Gremlin");
-            return false;
+        commands.push(`/api ${apiSource}`);
+
+        if (modelName) {
+            commands.push(`/model "${modelName}"`);
         }
     }
 
