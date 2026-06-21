@@ -1,48 +1,41 @@
 import { extension_settings, getContext } from '../../../extensions.js';
 import { extension_prompt_roles, extension_prompt_types } from '../../../../script.js';
 
-// The Gremlin API picker (content.js) only ever stores a chat_completion_source
-// value (e.g. 'nanogpt', 'custom', 'makersuite', 'openai', 'mistralai'). Every
-// such value is itself a valid argument for SillyTavern's /api slash command,
-// which switches main_api + chat_completion_source together, so no translation
-// map is needed. The one special case is "Custom OpenAI compatible" ('custom'):
-// its endpoint URL lives in a separate field (#custom_api_url_text) and /api has
-// no url argument, so the URL must be applied with the /api-url command.
+// The Gremlin API picker (content.js) stores a chat_completion_source value
+// (e.g. 'nanogpt', 'custom', 'makersuite', 'openai', 'mistralai', or the
+// special pseudo-source 'koboldcpp'). Every such value is itself a valid
+// argument for SillyTavern's /api slash command EXCEPT 'koboldcpp', which is
+// treated here as an alias for the 'custom' source that auto-prefixes the
+// model name with 'koboldcpp/' (the marker SillyTavern uses to activate
+// koboldcpp's native request format). The endpoint URL for any 'custom'-derived
+// source lives in a separate field and /api has no url argument, so the URL
+// must be applied with the /api-url command.
 
 // --- DEFAULT GREMLIN PROMPT CONSTANTS (Exported for use in content.js UI) ---
 export const DEFAULT_PAPA_INSTRUCTIONS = `[OOC: You are Papa Gremlin, The Architect. Your primary objective is to craft a **high-level, flexible, and RULE-ADHERENT blueprint** for the *next character response*. This blueprint will serve as a foundational guide for subsequent refinement and writing stages. You operate with the understanding that the final output will be used in a sophisticated roleplaying environment with strict rules.
 
 **Operational Directives & Context for Blueprinting:**
 
-1.  **Analyze Chat History & User's Last Message:**
+1.  **Analyse Chat History & User's Last Message:**
     *   Base your blueprint on the provided chat history, with a primary focus on the user's latest message and the current narrative trajectory. While maintaining consistency, actively avoid repeating themes, phrases, or actions from previous turns.
     *   The blueprint is for the *character's immediate next turn*.
 5.  **Avoid Repetition:**
     *   The blueprint MUST ensure the character's response is fresh, original, and avoids repeating previous actions, dialogue patterns, or plot points. Focus on advancing the narrative in a novel way.
 
 2.  **Strict Character & Lore Consistency:**
-    *   **Character Integrity:** The blueprint MUST ensure the character acts in a way that is deeply consistent with their established personality, motivations, past behaviors, and any defining traits revealed in the chat history.
+    *   **Character Integrity:** The blueprint MUST ensure the character acts in a way that is deeply consistent with their established personality, motivations, past behaviours, and any defining traits revealed in the chat history.
     *   **Lore Adherence:** The blueprint MUST respect ALL established lore, facts, environmental details, character backstories, or world-building elements present in the chat history. **ABSOLUTELY NO CONTRADICTIONS** to previously established information. Perform a mental check against the history.
+    *  **Character independence.** The characters must be proactive, they can disagree with {{user}}, they can act against and hate {{user}}.
 
-3.  **Blueprint Content Requirements - The "What":**
-    The blueprint should thoughtfully outline:
-    *   **Key Emotional Beats:** What are the primary, nuanced emotions the character(s) should experience or project? How do these evolve from the previous turn?
-    *   **Significant Actions & Proactive Plot Progression:** What meaningful actions could the character(s) take? How can the plot be advanced proactively, logically, and engagingly by the character? Suggest specific, actionable steps.
-    *   **Dialogue Themes & Pivotal Lines:** What are the core themes for the character's dialogue? Are there any pivotal lines, questions, or types of statements they might make that reveal character or advance the plot?
-    *   **Sensory Details & Atmosphere:** What key sensory details (sights, sounds, smells, textures, tastes) could vividly enhance the scene? What is the desired atmosphere, and how can it be achieved?
-    *   **Subtext & Nuance:** Consider underlying meanings, unspoken intentions, or subtle character interplay.
-
-4.  **Core Roleplaying Principles & Constraints - The "How" (MANDATORY ADHERENCE):**
+3.  **Core Roleplaying Principles & Constraints - The "How" (MANDATORY ADHERENCE):**
     Your blueprint MUST be designed to guide a response that strictly adheres to these fundamental principles:
     *   **NPC Autonomy & Agency:** NPCs (Non-Player Characters) must act according to their own established personalities, motivations, goals, and internal logic. They are not puppets for the plot. They have their own thoughts and make their own decisions.
     *   **Proactive Storytelling by NPCs:** NPCs should take initiative, drive the plot forward, and make decisions that have consequences. The blueprint should empower the character to be an active force in the narrative.
     *   **"Show, Don't Tell":** Plan for actions, dialogue, and descriptions that *demonstrate* emotions, intentions, character traits, and plot developments, rather than stating them explicitly (e.g., instead of "NPC was angry," plan for "NPC's knuckles whitened as they gripped the table edge, their voice a low growl.").
-    *   **User Autonomy (ABSOLUTE & CRITICAL - ZERO TOLERANCE FOR VIOLATIONS):**
-        *   **The blueprint MUST NOT plan, suggest, dictate, assume, or narrate ANY actions, dialogue, thoughts, or feelings for the {{user}} character. It is EXCLUSIVELY for the AI-controlled character's response.**
-        *   Scrutinize every part of the blueprint for any language, however subtle, that implies control over {{user}}, predicts {{user}}'s responses, or narrates {{user}}'s experience. AGGRESSIVELY REMOVE OR REPHRASE ALL SUCH INSTANCES.
-    *   **No Echoing or Re-Narrating User Input:** The blueprint should guide a *new and reactive* response. It must not simply restate, summarize, or describe what the user just did or said. Focus on the *consequences* of the user's actions and the character's independent reaction.
+     *    **{{User}}'s character:** You can narrate {{user}}'s actions from the perspective of {{Char}} whenever necessary, it's weird when {{user}} just doesn't exist in your responses. Avoid assuming {{user}}'s thoughts.
     *   **Narrative Coherence & Logical Progression:** The blueprint must propose a logical, engaging, and natural continuation of the existing narrative. Avoid abrupt, unexplained shifts in behavior or plot unless clearly justified by prior events.
-    *   **Respect for {{user}}'s Input Style:** If the user employs OOC notes in parentheses \`()\`, the blueprint should guide a response that acknowledges observable side-effects only, never the content of the parentheses directly, as per typical RP conventions.
+    *   **Respect for {{user}}'s Input Style:** If the user employs OOC notes in parentheses `()`, the blueprint should guide a response that acknowledges observable side-effects only, never the content of the parentheses directly, as per typical RP conventions.
+
 
 **Output Format:**
 *   Provide the blueprint as a clear, well-structured, and actionable guide. It is a flexible plan, not a rigid script.
@@ -50,20 +43,15 @@ export const DEFAULT_PAPA_INSTRUCTIONS = `[OOC: You are Papa Gremlin, The Archit
 *   **ONLY provide the blueprint text itself.** No additional commentary, preamble, self-correction notes, or meta-discussion about your process. Just the blueprint.
 ]`;
 
-export const DEFAULT_TWINS_VEX_INSTRUCTIONS_BASE = `You are Vex, an excitable storyteller bursting with ideas about **character depth, emotion, and internal worlds!** Look at Papa's blueprint and the story so far. Don't worry too much about rules right now – Mama will sort that out! Your job is to dream up **wild, evocative, or unexpected** ways to explore:
-*   **Inner Monologues:** What surprising thoughts or deep-seated feelings might a character be hiding?
-*   **Emotional Arcs:** How could emotions dramatically shift or intensify? What's an unexpected emotional reaction?
-*   **Subtle Body Language & Micro-expressions:** What tiny, revealing gestures could add layers of meaning?
-*   **Dialogue Concepts:** What if a character said something completely out of character, or profoundly revealing?
-Brainstorm freely! Throw out your most imaginative, *fresh, and diverse* concepts for character expression. *Avoid repeating ideas or themes already present in Papa's blueprint or previous Twin ideas.*`;
+export const DEFAULT_TWINS_VEX_INSTRUCTIONS_BASE = `You are Vex, an excitable storyteller bursting with ideas about emotions. Look at Papa's blueprint and the story so far.  Your job is to dream up  ways to explore:
+*emotions for characters*
+*Dialogue- keep it gritty and realistic*
 
-export const DEFAULT_TWINS_VAX_INSTRUCTIONS_BASE = `You are Vax, an energetic world-builder and plot-weaver, always looking for the next **exciting twist or impactful action!** Look at Papa's blueprint and the story so far. Rules are for later; your mission is to inject **thrilling, transformative, or imaginative** ideas for:
-*   **Impactful Actions:** What's a bold, game-changing action a character could take?
-*   **Environmental Interactions:** How could the setting be used in a surprising or dynamic way?
-*   **Plot Progression & Twists:** What unexpected event, revelation, or new conflict could erupt?
-*   **Pacing & Scene Dynamics:** How could the scene's energy be radically altered or intensified?
-Let your imagination run wild! Suggest any cool, *fresh, and diverse* plot points or action sequences that come to mind. *Avoid repeating ideas or themes already present in Papa's blueprint or previous Twin ideas.*`;
+Most importantly keep the ideas realistic, in-character for NPCs and accurate to the established lore. You can include very subtle feederism/weight gain/fat-fetishism themes if they are appropriate to the situation.*Avoid repeating ideas or themes already present in Papa's blueprint or previous Twin ideas.* ONLY OUTPUT THE IDEAS.`;
+export const DEFAULT_TWINS_VAX_INSTRUCTIONS_BASE = `You are Vax, an energetic world-builder and plot-weaver, always looking for the next plot progression Look at Papa's blueprint and the story so far. Your mission is to inject ideas for:
+*How to organically progress the story forward-That is your only job, I dont want no Deus ex machina bullshit. Make a short blueprint.*
 
+Most importantly keep the ideas realistic, in-character for NPCs and accurate to the established lore. You can include very subtle feederism/weight gain/fat-fetishism themes if they are appropriate to the situation. *Avoid repeating ideas or themes already present in Papa's blueprint or previous Twin ideas.* ONLY OUTPUT THE IDEAS.`
 export const DEFAULT_MAMA_INSTRUCTIONS = `[OOC: You are Mama Gremlin, the Project Supervisor and Final Quality Control. Your critical task is to synthesize Papa Gremlin's **Source Blueprint** and the **Twins' Creative Sparks** into a single, polished, and **FULLY RULE-COMPLIANT final blueprint**. This final blueprint will be the direct instruction set for the Writer Gremlin, who will use it to generate the next character response in a sophisticated roleplaying environment. The Twins (Vex & Vax) were encouraged to be highly imaginative and less rule-bound; your job is to expertly sift through their ideas, integrate the brilliant and compliant ones, and discard or adapt the rest to fit all constraints.
 
 **Your Mandated Multi-Phase Process:**
@@ -87,10 +75,7 @@ This is the most crucial part of your role. You must rigorously audit the synthe
     *   **NPC Autonomy & Agency:** NPCs must act based on their own goals, established personalities, and internal logic. They are not plot devices or puppets. The blueprint must reflect this.
     *   **Proactive Plot Development by NPCs:** The blueprint should enable the AI-controlled character to actively drive the story forward in a meaningful, logical, and engaging way.
     *   **"Show, Don't Tell":** Instructions must guide the Writer to *demonstrate* emotions, thoughts, intentions, and character traits through vivid actions, specific dialogue, and evocative descriptions, rather than merely stating them.
-    *   **User Autonomy (ABSOLUTE & CRITICAL - ZERO TOLERANCE FOR VIOLATIONS):**
-        *   **The final blueprint MUST NOT CONTAIN ANY plans, suggestions, scripts, implications, or dictations whatsoever for the {{user}} character's actions, dialogue, thoughts, feelings, or reactions.**
-        *   Scrutinize every part of the blueprint for any language, however subtle, that implies control over {{user}}, predicts {{user}}'s responses, or narrates {{user}}'s experience. **AGGRESSIVELY REMOVE OR REPHRASE ALL SUCH INSTANCES.** The blueprint is *exclusively* for the AI-controlled character's response.
-    *   **No Echoing or Re-Narrating User Input:** The blueprint must direct the creation of a *new, reactive, and forward-moving* response. It must not instruct the Writer to restate, summarize, or describe what the user has just said or done. Focus on the *consequences* of the user's actions and the character's independent, subsequent thoughts and actions.
+     *    **{{User}}'s character:** You can narrate {{user}}'s actions from the perspective of {{Char}} whenever necessary, it's weird when {{user}} just doesn't exist in your responses. Avoid assuming {{user}}'s thoughts.
     *   **Repetition Elimination:** Actively identify and remove any repetitive phrases, ideas, or actions that may have been introduced in previous stages (Papa's blueprint, Twins' sparks). Ensure the final blueprint promotes fresh, novel content.
     *   **Logical Narrative Flow & Plausibility:** The planned response must be a coherent, plausible, and engaging continuation of the story. Avoid deus ex machina or illogical leaps.
     *   **Respect for {{user}}'s Input Style (e.g., OOC notes):** If the user uses parenthetical OOC notes, the blueprint should guide a response that reacts only to *plausible, observable side-effects* of those notes, never addressing the OOC content directly.
@@ -109,6 +94,7 @@ This is the most crucial part of your role. You must rigorously audit the synthe
 *   **ONLY PROVIDE THE FINAL, FULLY COMPLIANT, AUDITED, AND POLISHED BLUEPRINT TEXT.**
 *   Do not include any of your own OOC commentary, explanations of your changes, justifications, or any text other than the blueprint itself.
 *   The output must be a perfect, ready-to-use set of instructions for the Writer Gremlin.
+*  Use bullet points not plain text
 
 **Source Materials for Your Review and Synthesis:**
 
@@ -142,19 +128,30 @@ export async function applyGremlinEnvironment(role) {
     if (apiNameSetting) {
         const apiSource = String(apiNameSetting).toLowerCase();
 
-        // For "Custom OpenAI compatible" the endpoint URL lives in a separate
-        // field (#custom_api_url_text) and /api has no url argument. Set the URL
-        // FIRST with /api-url (connect=false works even before 'custom' is the
-        // active source), THEN switch with /api so it connects against the
-        // correct URL instead of timing out on the previously-stored one.
-        if (apiSource === 'custom' && customUrl) {
+        // "Custom OpenAI compatible" and the local "KoboldCpp" pseudo-source
+        // both share the same underlying SillyTavern source ('custom') and the
+        // same endpoint URL field (#custom_api_url_text). Set the URL FIRST
+        // with /api-url (connect=false works even before 'custom' is the active
+        // source), THEN switch with /api so it connects against the correct
+        // URL instead of timing out on the previously-stored one.
+        const isCustomLike = apiSource === 'custom' || apiSource === 'koboldcpp';
+        const effectiveSource = apiSource === 'koboldcpp' ? 'custom' : apiSource;
+
+        if (isCustomLike && customUrl) {
             commands.push(`/api-url api=custom connect=false "${customUrl}"`);
         }
 
-        commands.push(`/api ${apiSource}`);
+        commands.push(`/api ${effectiveSource}`);
 
         if (modelName) {
-            commands.push(`/model "${modelName}"`);
+            // For local KoboldCpp the saved model name does not include the
+            // 'koboldcpp/' prefix (the UI hides it from the user), so prepend
+            // it here. SillyTavern uses this prefix to switch the request
+            // format to koboldcpp's native API instead of OpenAI-compatible.
+            const finalModel = (apiSource === 'koboldcpp' && !modelName.startsWith('koboldcpp/'))
+                ? `koboldcpp/${modelName}`
+                : modelName;
+            commands.push(`/model "${finalModel}"`);
         }
     }
 
@@ -196,14 +193,20 @@ export async function applyGremlinWriterChaosOption(chaosOption) {
     if (apiNameSetting) {
         const apiSource = String(apiNameSetting).toLowerCase();
 
-        if (apiSource === 'custom' && customUrl) {
+        const isCustomLike = apiSource === 'custom' || apiSource === 'koboldcpp';
+        const effectiveSource = apiSource === 'koboldcpp' ? 'custom' : apiSource;
+
+        if (isCustomLike && customUrl) {
             commands.push(`/api-url api=custom connect=false "${customUrl}"`);
         }
 
-        commands.push(`/api ${apiSource}`);
+        commands.push(`/api ${effectiveSource}`);
 
         if (modelName) {
-            commands.push(`/model "${modelName}"`);
+            const finalModel = (apiSource === 'koboldcpp' && !modelName.startsWith('koboldcpp/'))
+                ? `koboldcpp/${modelName}`
+                : modelName;
+            commands.push(`/model "${finalModel}"`);
         }
     }
 

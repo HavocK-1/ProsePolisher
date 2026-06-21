@@ -35,6 +35,13 @@ let isPipelineRunning = false;
 let isAppReady = false;
 let readyQueue = [];
 
+// Pseudo-source used by the Gremlin API picker for local koboldcpp servers.
+// Internally maps to SillyTavern's 'custom' chat_completion_source with the
+// model name auto-prefixed with 'koboldcpp/' (the marker that switches
+// SillyTavern to koboldcpp's native request format).
+const KOBOLDCPP_PSEUDO_SOURCE = 'koboldcpp';
+const KOBOLDCPP_DEFAULT_URL = 'http://localhost:5001/';
+
 // --- CONSTANTS ---
 
 // This map connects the API key to the DOM ID of the corresponding model dropdown in the main UI.
@@ -428,6 +435,9 @@ async function showApiEditorPopup(gremlinRole) {
                 <label for="pp_popup_source_input">Source (for some OpenAI-compatibles):</label>
                 <input type="text" id="pp_popup_source_input" class="text_pole" placeholder="e.g., DeepSeek">
             </div>
+            <div id="pp_popup_koboldcpp_note" style="display: none;">
+                <small style="color: var(--text_color_dim);">KoboldCpp is local and does not require an API key. The <code>koboldcpp/</code> prefix is added automatically when the model name is sent to SillyTavern.</small>
+            </div>
         </div>
         <br>
         <button id="pp-unbind-btn" class="menu_button is_dangerous">Clear All</button>
@@ -442,6 +452,7 @@ async function showApiEditorPopup(gremlinRole) {
     const customUrlInput = popupContent.querySelector('#pp_popup_custom_url_input');
     const sourceGroup = popupContent.querySelector('#pp_popup_source_group');
     const sourceInput = popupContent.querySelector('#pp_popup_source_input');
+    const koboldcppNote = popupContent.querySelector('#pp_popup_koboldcpp_note');
 
     // Populate API Provider dropdown
     for (const name of Object.values(chat_completion_sources)) {
@@ -450,6 +461,13 @@ async function showApiEditorPopup(gremlinRole) {
         option.textContent = name.charAt(0).toUpperCase() + name.slice(1).replace(/([A-Z])/g, ' $1').trim();
         apiSelect.appendChild(option);
     }
+    // Append the local KoboldCpp pseudo-source. It is NOT in chat_completion_sources
+    // because SillyTavern treats koboldcpp as the 'custom' source whose model name
+    // carries the 'koboldcpp/' prefix.
+    const koboldcppOption = document.createElement('option');
+    koboldcppOption.value = KOBOLDCPP_PSEUDO_SOURCE;
+    koboldcppOption.textContent = 'KoboldCpp (local)';
+    apiSelect.appendChild(koboldcppOption);
     apiSelect.value = currentApi;
 
     const populateModels = (api) => {
@@ -475,10 +493,25 @@ async function showApiEditorPopup(gremlinRole) {
 
         // Toggle UI elements based on API
         const isCustom = api === chat_completion_sources.CUSTOM;
-        modelGroup.style.display = !isCustom ? 'block' : 'none';
-        customModelGroup.style.display = isCustom ? 'block' : 'none';
-        customUrlGroup.style.display = isCustom ? 'block' : 'none';
+        const isKoboldCpp = api === KOBOLDCPP_PSEUDO_SOURCE;
+        const isCustomLike = isCustom || isKoboldCpp;
+        modelGroup.style.display = !isCustomLike ? 'block' : 'none';
+        customModelGroup.style.display = isCustomLike ? 'block' : 'none';
+        customUrlGroup.style.display = isCustomLike ? 'block' : 'none';
         sourceGroup.style.display = ['openai', 'openrouter', 'custom'].includes(api) ? 'block' : 'none';
+        if (koboldcppNote) koboldcppNote.style.display = isKoboldCpp ? 'block' : 'none';
+        customModelInput.placeholder = isKoboldCpp
+            ? 'e.g., koboldcpp (prefix added automatically)'
+            : 'e.g., My-Fine-Tune-v1';
+        customUrlInput.placeholder = isKoboldCpp
+            ? KOBOLDCPP_DEFAULT_URL
+            : 'Enter your custom API URL';
+
+        // Auto-prefill the default koboldcpp URL when switching to it on an
+        // empty field so local users do not have to type it.
+        if (isKoboldCpp && !customUrlInput.value.trim()) {
+            customUrlInput.value = KOBOLDCPP_DEFAULT_URL;
+        }
 
         if (sourceSelect) {
             // Clone all options (including those in optgroups)
@@ -502,7 +535,9 @@ async function showApiEditorPopup(gremlinRole) {
     customModelInput.value = currentModel;
     // *** FIX STARTS HERE: Pre-fill the Custom URL input ***
     // Use the role's saved URL if it exists, otherwise fall back to the main UI's setting.
-    customUrlInput.value = currentCustomUrl || mainCustomUrl;
+    // Preserve any value already placed in the field by populateModels (e.g. the
+    // KoboldCpp default URL auto-prefill) so it is not overwritten on first use.
+    customUrlInput.value = customUrlInput.value || currentCustomUrl || mainCustomUrl;
     // *** FIX ENDS HERE ***
     sourceInput.value = currentSource;
 
@@ -520,8 +555,14 @@ async function showApiEditorPopup(gremlinRole) {
         const selectedApi = apiSelect.value;
         settings[`gremlin${roleUpper}Api`] = selectedApi;
 
-        if (selectedApi === chat_completion_sources.CUSTOM) {
-            settings[`gremlin${roleUpper}Model`] = customModelInput.value.trim();
+        if (selectedApi === chat_completion_sources.CUSTOM || selectedApi === KOBOLDCPP_PSEUDO_SOURCE) {
+            // Strip the koboldcpp/ prefix from the saved model name; projectgremlin.js
+            // will re-add it at runtime so the user does not have to type it.
+            let rawModel = customModelInput.value.trim();
+            if (selectedApi === KOBOLDCPP_PSEUDO_SOURCE && rawModel.startsWith('koboldcpp/')) {
+                rawModel = rawModel.substring('koboldcpp/'.length);
+            }
+            settings[`gremlin${roleUpper}Model`] = rawModel;
             settings[`gremlin${roleUpper}CustomUrl`] = customUrlInput.value.trim();
         } else {
             settings[`gremlin${roleUpper}Model`] = modelSelect.value;
@@ -771,6 +812,9 @@ async function showChaosOptionEditorPopup(optionId, onSaveCallback) {
                 <label for="pp_chaos_source_input">Source (for some OpenAI-compatibles):</label>
                 <input type="text" id="pp_chaos_source_input" class="text_pole" placeholder="e.g., DeepSeek">
             </div>
+            <div id="pp_chaos_koboldcpp_note" style="display: none;">
+                <small style="color: var(--text_color_dim);">KoboldCpp is local and does not require an API key. The <code>koboldcpp/</code> prefix is added automatically.</small>
+            </div>
             <hr>
             <div>
                 <label for="pp_chaos_weight_input">Weight (higher is more likely):</label>
@@ -790,6 +834,7 @@ async function showChaosOptionEditorPopup(optionId, onSaveCallback) {
     const sourceGroup = popupContent.querySelector('#pp_chaos_source_group');
     const sourceInput = popupContent.querySelector('#pp_chaos_source_input');
     const weightInput = popupContent.querySelector('#pp_chaos_weight_input');
+    const koboldcppNote = popupContent.querySelector('#pp_chaos_koboldcpp_note');
 
     // Populate Preset dropdown
     const presetOptions = ['<option value="Default">Default</option>', ...Object.keys(openai_setting_names).map(name => `<option value="${name}">${name}</option>`)].join('');
@@ -803,6 +848,10 @@ async function showChaosOptionEditorPopup(optionId, onSaveCallback) {
         opt.textContent = name.charAt(0).toUpperCase() + name.slice(1).replace(/([A-Z])/g, ' $1').trim();
         apiSelect.appendChild(opt);
     }
+    const koboldcppOpt = document.createElement('option');
+    koboldcppOpt.value = KOBOLDCPP_PSEUDO_SOURCE;
+    koboldcppOpt.textContent = 'KoboldCpp (local)';
+    apiSelect.appendChild(koboldcppOpt);
     apiSelect.value = option.api;
 
     const populateModels = (api) => {
@@ -822,10 +871,23 @@ async function showChaosOptionEditorPopup(optionId, onSaveCallback) {
             }
         }
         const isCustom = api === chat_completion_sources.CUSTOM;
-        modelGroup.style.display = !isCustom ? 'block' : 'none';
-        customModelGroup.style.display = isCustom ? 'block' : 'none';
-        customUrlGroup.style.display = isCustom ? 'block' : 'none';
+        const isKoboldCpp = api === KOBOLDCPP_PSEUDO_SOURCE;
+        const isCustomLike = isCustom || isKoboldCpp;
+        modelGroup.style.display = !isCustomLike ? 'block' : 'none';
+        customModelGroup.style.display = isCustomLike ? 'block' : 'none';
+        customUrlGroup.style.display = isCustomLike ? 'block' : 'none';
         sourceGroup.style.display = ['openai', 'openrouter', 'custom'].includes(api) ? 'block' : 'none';
+        if (koboldcppNote) koboldcppNote.style.display = isKoboldCpp ? 'block' : 'none';
+        customModelInput.placeholder = isKoboldCpp
+            ? 'e.g., koboldcpp (prefix added automatically)'
+            : 'e.g., My-Fine-Tune-v1';
+        customUrlInput.placeholder = isKoboldCpp
+            ? KOBOLDCPP_DEFAULT_URL
+            : 'Enter your custom API URL';
+
+        if (isKoboldCpp && !customUrlInput.value.trim()) {
+            customUrlInput.value = KOBOLDCPP_DEFAULT_URL;
+        }
 
         if (sourceSelect) {
             Array.from(sourceSelect.childNodes).forEach(node => modelSelect.appendChild(node.cloneNode(true)));
@@ -844,20 +906,26 @@ async function showChaosOptionEditorPopup(optionId, onSaveCallback) {
     modelSelect.value = option.model;
     customModelInput.value = option.model;
     // *** FIX STARTS HERE: Pre-fill the Custom URL input for Chaos options ***
-    customUrlInput.value = option.customUrl || mainCustomUrl;
+    // Preserve any value already placed in the field by populateModels (e.g.
+    // the KoboldCpp default URL auto-prefill).
+    customUrlInput.value = customUrlInput.value || option.customUrl || mainCustomUrl;
     // *** FIX ENDS HERE ***
     sourceInput.value = option.source;
 
     if (await callGenericPopup(popupContent, POPUP_TYPE.CONFIRM, isNew ? 'Add Chaos Option' : 'Edit Chaos Option')) {
         const newApi = apiSelect.value;
-        const newModel = newApi === chat_completion_sources.CUSTOM ? customModelInput.value.trim() : modelSelect.value;
+        const isCustomLike = newApi === chat_completion_sources.CUSTOM || newApi === KOBOLDCPP_PSEUDO_SOURCE;
+        let newModel = isCustomLike ? customModelInput.value.trim() : modelSelect.value;
+        if (newApi === KOBOLDCPP_PSEUDO_SOURCE && newModel.startsWith('koboldcpp/')) {
+            newModel = newModel.substring('koboldcpp/'.length);
+        }
 
         const updatedOption = {
             id: option.id,
             preset: presetSelect.value,
             api: newApi,
             model: newModel,
-            customUrl: newApi === chat_completion_sources.CUSTOM ? customUrlInput.value.trim() : '',
+            customUrl: isCustomLike ? customUrlInput.value.trim() : '',
             source: sourceInput.value.trim(),
             weight: parseInt(weightInput.value, 10) || 1,
         };
