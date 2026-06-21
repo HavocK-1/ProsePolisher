@@ -1,3 +1,60 @@
+## Fork Changes (HavocK-1)
+
+This is a fork of [NemoVonNirgend/ProsePolisher](https://github.com/NemoVonNirgend/ProsePolisher) with changes focused on making the **Project Gremlin** planning pipeline reliably obey its instructions across different model prompt templates and SillyTavern post‑processing configurations.
+
+### Problem
+
+When the Project Gremlin pipeline (Papa → Twins → Mama) issued a `/gen ... |` slash command, the per‑stage instructions were sent entirely inside a single user‑side prompt. With **Prompt Post‑Processing = None**, this caused several issues:
+
+1. **Ignored instructions:** Models frequently ignored long, in‑prompt instructions and produced off‑task output.
+2. **Template drift:** Some chat templates render in‑history `user` content very differently from system content, so instruction tone / role expectations shifted between models.
+3. **Leftover state on errors:** If a stage failed mid‑pipeline, downstream stages could be poisoned by partially‑injected content from earlier stages.
+
+### Changes (file: `projectgremlin.js`)
+
+1. **System‑prompt injection for Gremlin stages.**
+   Added `injectGremlinSystemPrompt(promptId, content)` and `clearGremlinSystemPrompt(promptId)` helpers that call SillyTavern's `setExtensionPrompt` API to inject each stage's instructions into the **user role** at the **end of chat history** (`IN_CHAT`, `depth = 0`) so the model sees them in its native chat template.
+   - Papa Gremlin → `gremlin_papa`
+   - Twin brainstorm turns → `gremlin_twin_vex_<i>` / `gremlin_twin_vax_<i>`
+   - Mama Gremlin → `gremlin_mama`
+
+2. **Fixed role constant bug.**
+   `setExtensionPrompt` coerces its `role` argument with `Number(role ?? SYSTEM)`. Passing the string `'user'` became `NaN`, which silently fell back to the **system** role and was dropped under post‑processing = None. The fork now imports `extension_prompt_roles` and `extension_prompt_types` from `script.js` and passes the numeric `extension_prompt_roles.USER` and `extension_prompt_types.IN_CHAT` constants.
+
+3. **`executeGen` options payload.**
+   `executeGen(promptText, options)` now accepts `{ useSystemPrompt, systemPromptId, systemPromptContent, triggerText }`. When `useSystemPrompt` is true, the heavy instructions are injected into the system role and a short `triggerText` (e.g. *"Produce the blueprint now, following all directives above."*) is what actually gets sent through `/gen ... |`. The injected prompt is always cleared in a `finally` block, even on failure.
+
+4. **Defensive cleanup at pipeline start.**
+   `runGremlinPlanningPipeline` proactively clears any leftover `gremlin_papa`, `gremlin_mama`, and twin‑iteration injection IDs before beginning, so a previously‑errored run cannot corrupt a fresh pipeline.
+
+5. **Twin prompt split.**
+   Each twin turn now sends the persona/role text in the system role and the per‑iteration context (Papa's blueprint + prior sparks) as a separate user message, which is more robust across chat templates than a single merged user prompt.
+
+6. **Un-cancered default prompts.**
+  Previous prompts were writtten by like an ancient LLama 8B or some shit- mine are simplified and slightly improved; originals were flowery, made the model stupid and imposed llmisms. NOT PERFECT- ESPECIALLY PAPA AND MAMA NEED A LOT MORE WORK.
+
+7. **Built-in Koboldcpp endpoint.**
+  Fucking title.
+
+
+### Compatibility notes
+
+- Requires SillyTavern's `getContext()` to expose `setExtensionPrompt` (standard on current ST builds).
+- Import path: `../../../../script.js` from inside this extension folder.
+- The `import { extension_settings, getContext } from '../../../extensions.js';` line is preserved unchanged from upstream.
+
+---
+
+## Contributing
+
+Feedback, bug reports, and pull requests are welcome!
+
+1.  **Suggestions & Bug Reports:** Please open an issue on the GitHub repository, providing as much detail as possible.
+2.  **New Static Rules:** If you have a high-quality regex for a common cliché, feel free to open a pull request to add it to the `regex_rules.json` file for everyone to use.
+
+---
+
+
 ## Table of Contents
 - [Key Features](#key-features)
 - [How It Works: The Three Pillars](#how-it-works-the-three-pillars)
@@ -125,54 +182,5 @@ Curious how the dynamic rules are made? The extension uses a detailed system pro
 
 *   **Q: I see `(PP)` rules in the main Regex settings, but I can't edit them there.**
     *   **A:** This is intentional. Prose Polisher's rules are hidden from the standard Regex Processor UI to avoid clutter and confusion. **Always** use the **Prose Polisher Regex Navigator** to manage its rules.
-
----
-
-## Fork Changes (HavocK-1)
-
-This is a fork of [NemoVonNirgend/ProsePolisher](https://github.com/NemoVonNirgend/ProsePolisher) with changes focused on making the **Project Gremlin** planning pipeline reliably obey its instructions across different model prompt templates and SillyTavern post‑processing configurations.
-
-### Problem
-
-When the Project Gremlin pipeline (Papa → Twins → Mama) issued a `/gen ... |` slash command, the per‑stage instructions were sent entirely inside a single user‑side prompt. With **Prompt Post‑Processing = None**, this caused several issues:
-
-1. **Ignored instructions:** Models frequently ignored long, in‑prompt instructions and produced off‑task output.
-2. **Template drift:** Some chat templates render in‑history `user` content very differently from system content, so instruction tone / role expectations shifted between models.
-3. **Leftover state on errors:** If a stage failed mid‑pipeline, downstream stages could be poisoned by partially‑injected content from earlier stages.
-
-### Changes (file: `projectgremlin.js`)
-
-1. **System‑prompt injection for Gremlin stages.**
-   Added `injectGremlinSystemPrompt(promptId, content)` and `clearGremlinSystemPrompt(promptId)` helpers that call SillyTavern's `setExtensionPrompt` API to inject each stage's instructions into the **user role** at the **end of chat history** (`IN_CHAT`, `depth = 0`) so the model sees them in its native chat template.
-   - Papa Gremlin → `gremlin_papa`
-   - Twin brainstorm turns → `gremlin_twin_vex_<i>` / `gremlin_twin_vax_<i>`
-   - Mama Gremlin → `gremlin_mama`
-
-2. **Fixed role constant bug.**
-   `setExtensionPrompt` coerces its `role` argument with `Number(role ?? SYSTEM)`. Passing the string `'user'` became `NaN`, which silently fell back to the **system** role and was dropped under post‑processing = None. The fork now imports `extension_prompt_roles` and `extension_prompt_types` from `script.js` and passes the numeric `extension_prompt_roles.USER` and `extension_prompt_types.IN_CHAT` constants.
-
-3. **`executeGen` options payload.**
-   `executeGen(promptText, options)` now accepts `{ useSystemPrompt, systemPromptId, systemPromptContent, triggerText }`. When `useSystemPrompt` is true, the heavy instructions are injected into the system role and a short `triggerText` (e.g. *"Produce the blueprint now, following all directives above."*) is what actually gets sent through `/gen ... |`. The injected prompt is always cleared in a `finally` block, even on failure.
-
-4. **Defensive cleanup at pipeline start.**
-   `runGremlinPlanningPipeline` proactively clears any leftover `gremlin_papa`, `gremlin_mama`, and twin‑iteration injection IDs before beginning, so a previously‑errored run cannot corrupt a fresh pipeline.
-
-5. **Twin prompt split.**
-   Each twin turn now sends the persona/role text in the system role and the per‑iteration context (Papa's blueprint + prior sparks) as a separate user message, which is more robust across chat templates than a single merged user prompt.
-
-### Compatibility notes
-
-- Requires SillyTavern's `getContext()` to expose `setExtensionPrompt` (standard on current ST builds).
-- Import path: `../../../../script.js` from inside this extension folder.
-- The `import { extension_settings, getContext } from '../../../extensions.js';` line is preserved unchanged from upstream.
-
----
-
-## Contributing
-
-Feedback, bug reports, and pull requests are welcome!
-
-1.  **Suggestions & Bug Reports:** Please open an issue on the GitHub repository, providing as much detail as possible.
-2.  **New Static Rules:** If you have a high-quality regex for a common cliché, feel free to open a pull request to add it to the `regex_rules.json` file for everyone to use.
 
 ---
