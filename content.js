@@ -1238,17 +1238,15 @@ async function onUserMessageRenderedForGremlin(messageId) {
 
         window.toastr.success("Gremlin Pipeline: Blueprint complete! Prompt instruction prepared.", "Project Gremlin");
         
-        // *** ROBUST FIX & ENHANCEMENT STARTS HERE ***
-        const adherenceInstruction = "[System: Adhere to the detailed blueprint provided in the following instruction.]";
-
-        // Let JSON.stringify handle all escaping for both injections.
-        const adherenceArg = JSON.stringify(adherenceInstruction);
+        // Inject the full blueprint at depth 0 (the deepest, most-attended
+        // position in the prompt). Previously the blueprint sat at depth 2 —
+        // above the user's latest turn — so instruct-tuned Writer models
+        // routinely ignored it as stale context. A single depth-0 system
+        // injection is the slot the model attends to most strongly.
         const blueprintArg = JSON.stringify(finalInjectedInstruction);
-
-        const finalScript = `/inject id=gremlin_adherence_prompt position=chat depth=0 ${adherenceArg} | /inject id=gremlin_final_plan position=chat depth=2 ${blueprintArg}`;
+        const finalScript = `/inject id=gremlin_final_plan position=chat depth=0 role=user ${blueprintArg}`;
 
         await context.executeSlashCommands(finalScript);
-        // *** ROBUST FIX & ENHANCEMENT ENDS HERE ***
 
     } catch (error) {
         console.error('[ProjectGremlin] A critical error occurred during the pipeline execution:', error);
